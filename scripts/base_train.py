@@ -427,6 +427,9 @@ print0(f"Tokens / micro-batch / rank: {args.device_batch_size} x {args.max_seq_l
 print0(f"Tokens / micro-batch: {world_tokens_per_fwdbwd:,}")
 print0(f"Total batch size {total_batch_size:,} => gradient accumulation steps: {grad_accum_steps}")
 
+# MLflow logging interval: ~10 data points minimum, capped at every 100 steps
+_mlflow_log_every = max(1, min(100, num_iterations // 10)) if _USE_MLFLOW else 1
+
 # Go!
 while True:
     last_step = step == num_iterations # loop runs num_iterations+1 times so that we can eval/save at the end
@@ -597,12 +600,14 @@ while True:
             "train/epoch": epoch,
         }
         wandb_run.log(log_data)
-        if _USE_MLFLOW:
-            mlflow.log_metrics({
-                "train_loss": debiased_smooth_loss,
-                "train_tok_per_sec": tok_per_sec,
-                "train_mfu": mfu,
-            }, step=step)
+
+    # MLflow: log at adaptive interval (~10 data points minimum)
+    if _USE_MLFLOW and step % _mlflow_log_every == 0:
+        mlflow.log_metrics({
+            "train_loss": debiased_smooth_loss,
+            "train_tok_per_sec": tok_per_sec,
+            "train_mfu": mfu,
+        }, step=step)
 
     # state update
     first_step_of_run = (step == 0) or (resuming and step == args.resume_from_step)

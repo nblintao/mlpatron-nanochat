@@ -112,6 +112,10 @@ wandb_run = DummyWandb() if use_dummy_wandb else wandb.init(project="nanochat", 
 if _USE_MLFLOW and master_process:
     mlflow.start_run(run_id=os.environ.get("MLFLOW_RUN_ID"))
     mlflow.log_params({k: v for k, v in user_config.items() if v is not None})
+    # Log GPU info if available
+    if device_type == "cuda":
+        mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
+        mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_mem / 1024**3, 1))
 else:
     _USE_MLFLOW = False  # disable on non-master ranks
 
@@ -368,6 +372,19 @@ else:
     raise ValueError("No training horizon specified")
 total_tokens = total_batch_size * num_iterations # the actual number of tokens we will train for
 print0(f"Total number of training tokens: {total_tokens:,}")
+
+# Log computed training setup to MLflow
+if _USE_MLFLOW:
+    mlflow.log_params({
+        "computed_total_batch_size": total_batch_size,
+        "computed_num_iterations": num_iterations,
+        "computed_total_tokens": total_tokens,
+        "num_params": num_params,
+        "num_scaling_params": num_scaling_params,
+        "num_flops_per_token": f"{num_flops_per_token:.2e}",
+        "tokens_per_scaling_param": round(total_tokens / num_scaling_params, 2),
+        "grad_accum_steps": total_batch_size // (args.device_batch_size * args.max_seq_len),
+    })
 print0(f"Tokens : Scaling params ratio: {total_batch_size * num_iterations / num_scaling_params:.2f}") # e.g. Chinchilla was ~20
 print0(f"Total training FLOPs estimate: {num_flops_per_token * total_tokens:e}")
 
@@ -607,6 +624,10 @@ while True:
             "train_loss": debiased_smooth_loss,
             "train_tok_per_sec": tok_per_sec,
             "train_mfu": mfu,
+            "train_dt_ms": dt * 1000,
+            "train_lr_multiplier": lrm,
+            "total_training_time_min": total_training_time / 60,
+            "eta_min": eta_seconds / 60 if steps_done > 0 else 0,
         }, step=step)
 
     # state update
@@ -658,7 +679,11 @@ get_report().log(section="Base model training", data=[
 # cleanup
 if _USE_MLFLOW:
     # Log final summary metrics
-    final_metrics = {"num_params": num_params, "total_training_time_min": total_training_time / 60}
+    final_metrics = {
+        "num_params": num_params,
+        "total_training_time_min": total_training_time / 60,
+        "peak_memory_mib": get_max_memory() / 1024 / 1024,
+    }
     if val_bpb is not None:
         final_metrics["min_val_bpb"] = min_val_bpb
         final_metrics["final_val_bpb"] = val_bpb

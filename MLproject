@@ -4,7 +4,7 @@ docker_env:
   image: ghcr.io/nblintao/mlpatron-nanochat:latest
 
 # ---------------------------------------------------------------------------
-# Preset for 1×A100 40GB (~196M params, ~60min, ~$5)
+# Preset for 1×A100 40GB (~196M params, ~55min, ~$4)
 #
 # Key relationships:
 #   total_tokens = total_batch_size × num_iterations
@@ -21,8 +21,8 @@ docker_env:
 #   --sample-every -1        skip text generation sampling
 #
 # Performance (measured on A100-SXM4-40GB):
-#   d10: MFU=53%, step_time=1.85s, peak_mem=11.6GB, val_bpb=0.898
-#   Each eval point costs ~70s; eval_every=300 keeps wall time ≈ 60min.
+#   d10: MFU=55%, step_time=1.77s, peak_mem=21.2GB, val_bpb=0.897
+#   Each eval point costs ~70s; eval_every=300 keeps wall time ≈ 55min.
 # ---------------------------------------------------------------------------
 
 entry_points:
@@ -36,19 +36,19 @@ entry_points:
         default: 1500           # ~1.07× Chinchilla-optimal for d10
       device_batch_size:
         type: int
-        default: 16             # upstream default=32 may OOM on 40GB; 16 is safe
+        default: 32             # MFU 55% on A100 40GB (21 GB peak mem, safe)
       max_seq_len:
         type: int
         default: 2048           # same as upstream default
       num_data_shards:
         type: int
-        default: 12             # ~720M tokens, covers d10's ~786M token budget
+        default: 14             # ~840M tokens, single-epoch for d10 (needs ~786M)
       eval_every:
         type: int
         default: 300            # 7 eval points; each costs ~70s for d10
       tok_max_chars:
         type: int
-        default: 200000000      # 200M chars for tokenizer training (default: 2B)
+        default: 1000000000     # 1B chars for tokenizer training (adds ~35s overhead)
     command: >-
       python -m nanochat.dataset -n {num_data_shards} &&
       python -m scripts.tok_train --max-chars {tok_max_chars} &&

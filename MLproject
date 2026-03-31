@@ -179,3 +179,78 @@ entry_points:
       --mmlu-epochs {mmlu_epochs}
       --gsm8k-epochs {gsm8k_epochs}
       --upload-checkpoint {upload_checkpoint}
+
+# ---------------------------------------------------------------------------
+# Chat eval on 1×H100 80GB (~5-10min)
+#
+# Evaluates an SFT or RL model on ARC-Easy, ARC-Challenge, MMLU, GSM8K,
+# HumanEval, and SpellingBee.  Requires an SFT (or RL) checkpoint.
+# ---------------------------------------------------------------------------
+
+  h100_d12_chat_eval:
+    parameters:
+      sft_mlflow_run_id:
+        type: string
+        default: "2bffbfabb3024458ae2778a12f320163"  # d12 SFT baseline
+      eval_source:
+        type: string
+        default: "sft"              # sft|rl
+      max_problems:
+        type: int
+        default: 9999               # per-task cap; 9999 = effectively unlimited
+      tok_max_chars:
+        type: int
+        default: 2000000000
+    command: >-
+      python -m nanochat.dataset -n 8 &&
+      python -m scripts.tok_train --max-chars {tok_max_chars} &&
+      python -c "import mlflow, os, shutil; dst = os.path.join(os.path.expanduser('~'), '.cache', 'nanochat', 'chatsft_checkpoints', 'd12'); os.makedirs(dst, exist_ok=True); tmp = mlflow.artifacts.download_artifacts(run_id='{sft_mlflow_run_id}', artifact_path='checkpoint'); [shutil.move(os.path.join(tmp, f), os.path.join(dst, f)) for f in os.listdir(tmp)]; print('Checkpoint downloaded to ' + dst + ': ' + str(os.listdir(dst)))" &&
+      python -m scripts.chat_eval
+      -i {eval_source}
+      -x {max_problems}
+
+# ---------------------------------------------------------------------------
+# RL (GRPO on GSM8K) on 1×H100 80GB (~10-20min)
+#
+# Reinforcement learning on GSM8K using simplified GRPO.
+# Loads from SFT checkpoint.  GSM8K train=7473, default examples_per_step=16,
+# so 1 epoch = 467 steps.
+# ---------------------------------------------------------------------------
+
+  h100_d12_chat_rl:
+    parameters:
+      sft_mlflow_run_id:
+        type: string
+        default: "2bffbfabb3024458ae2778a12f320163"  # d12 SFT baseline
+      num_epochs:
+        type: int
+        default: 1
+      device_batch_size:
+        type: int
+        default: 8
+      examples_per_step:
+        type: int
+        default: 16
+      eval_every:
+        type: int
+        default: 60
+      save_every:
+        type: int
+        default: 60
+      upload_checkpoint:
+        type: int
+        default: 0
+      tok_max_chars:
+        type: int
+        default: 2000000000
+    command: >-
+      python -m nanochat.dataset -n 8 &&
+      python -m scripts.tok_train --max-chars {tok_max_chars} &&
+      python -c "import mlflow, os, shutil; dst = os.path.join(os.path.expanduser('~'), '.cache', 'nanochat', 'chatsft_checkpoints', 'd12'); os.makedirs(dst, exist_ok=True); tmp = mlflow.artifacts.download_artifacts(run_id='{sft_mlflow_run_id}', artifact_path='checkpoint'); [shutil.move(os.path.join(tmp, f), os.path.join(dst, f)) for f in os.listdir(tmp)]; print('Checkpoint downloaded to ' + dst + ': ' + str(os.listdir(dst)))" &&
+      python -m scripts.chat_rl
+      --device-batch-size {device_batch_size}
+      --num-epochs {num_epochs}
+      --examples-per-step {examples_per_step}
+      --eval-every {eval_every}
+      --save-every {save_every}
+      --upload-checkpoint {upload_checkpoint}

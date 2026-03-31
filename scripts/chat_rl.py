@@ -22,6 +22,9 @@ import itertools
 import wandb
 import torch
 import torch.distributed as dist
+# MLflow integration (activated when MLFLOW_TRACKING_URI is set, e.g. on MLPatron)
+import mlflow
+_USE_MLFLOW = bool(os.environ.get("MLFLOW_TRACKING_URI"))
 from nanochat.common import compute_init, compute_cleanup, print0, get_base_dir, DummyWandb, autodetect_device_type
 from nanochat.checkpoint_manager import save_checkpoint, load_model
 from nanochat.engine import Engine
@@ -57,6 +60,8 @@ parser.add_argument("--init-lr-frac", type=float, default=0.05, help="initial LR
 parser.add_argument("--eval-every", type=int, default=60, help="evaluate pass@k every N steps")
 parser.add_argument("--eval-examples", type=int, default=400, help="number of examples for pass@k evaluation")
 parser.add_argument("--save-every", type=int, default=60, help="save checkpoint every N steps")
+# MLflow
+parser.add_argument("--upload-checkpoint", type=int, default=0, help="upload checkpoints to MLflow artifacts (0=off, 1=on)")
 args = parser.parse_args()
 user_config = vars(args).copy()
 # -----------------------------------------------------------------------------
@@ -67,8 +72,18 @@ ddp, ddp_rank, ddp_local_rank, ddp_world_size, device = compute_init(device_type
 master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
 
 # wandb logging init
-use_dummy_wandb = args.run == "dummy" or not master_process
+if _USE_MLFLOW and args.run == "dummy":
+    use_dummy_wandb = True
+else:
+    use_dummy_wandb = args.run == "dummy" or not master_process
 wandb_run = DummyWandb() if use_dummy_wandb else wandb.init(project="nanochat-rl", name=args.run, config=user_config)
+
+# MLflow logging init (only on master process)
+if _USE_MLFLOW and master_process:
+    mlflow.start_run(run_id=os.environ.get("MLFLOW_RUN_ID"))
+    mlflow.log_params({k: v for k, v in user_config.items() if v is not None})
+else:
+    _USE_MLFLOW = False  # disable on non-master ranks
 
 # Init model and tokenizer
 model, tokenizer, meta = load_model("sft", device, phase="eval", model_tag=args.model_tag, step=args.model_step)
@@ -292,6 +307,8 @@ for step in range(num_steps):
         "reward": mean_reward,
         "sequence_length": mean_sequence_length,
     })
+    if _USE_MLFLOW:
+        mlflow.log_metrics({"reward": mean_reward, "sequence_length": mean_sequence_length}, step=step)
 
     # Update the model parameters
     lrm = get_lr_multiplier(step)
@@ -321,6 +338,13 @@ for step in range(num_steps):
             }
         )
         print(f"✅ Saved model checkpoint to {checkpoint_dir}")
+        # Upload checkpoint to MLflow artifacts
+        if _USE_MLFLOW and args.upload_checkpoint:
+            try:
+                mlflow.log_artifacts(checkpoint_dir, artifact_path="checkpoint")
+                print0(f"Uploaded checkpoint to MLflow artifacts")
+            except Exception as e:
+                print0(f"Warning: failed to upload checkpoint to MLflow: {e}")
 
 # Log to report
 from nanochat.report import get_report
@@ -328,5 +352,7 @@ get_report().log(section="Chat RL", data=[
     user_config, # CLI args
 ])
 
+if _USE_MLFLOW:
+    mlflow.end_run()
 wandb_run.finish() # wandb run finish
 compute_cleanup()

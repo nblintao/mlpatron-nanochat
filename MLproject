@@ -139,7 +139,8 @@ entry_points:
   h100_d12_sft:
     parameters:
       pretrain_mlflow_run_id:
-        type: string                # MLflow run ID that holds the pretrain checkpoint
+        type: string
+        default: "25207c33abca4a8197870adec4ead007"  # d12 H100 SSSL final
       device_batch_size:
         type: int
         default: 32
